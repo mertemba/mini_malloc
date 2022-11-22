@@ -90,7 +90,7 @@ static void set_prev_node_size(memnode* node, size_type prev_node_size) {
 #undef ALLOCATED_FLAG
 
 static ptrdiff_type (* free_nodes)[SIZES_COUNT];
-size_type sizes[SIZES_COUNT];
+static size_type sizes[SIZES_COUNT];
 
 static int uint64_log2(uint64_t n) {
 #define S(k) if (n >= (UINT64_C(1) << k)) { i += k; n >>= k; }
@@ -112,7 +112,7 @@ static size_index_type get_size_index_upper(size_type size_) {
         return size - 1;
     }
     if (size > (1ull << 16)) {
-        return 59;
+        return 58;
     }
     size *= size;
     size *= size;
@@ -180,7 +180,7 @@ void init_mini_malloc(void* buffer, size_t blocksize) {
     }
 
     free_nodes = NULL;
-    byte* ptr = buffer;
+    byte* ptr = (byte*) buffer;
     size_type size = blocksize - ALLOC_NODE_SIZE - sizeof(memnode);
     // fill free_nodes
     size_t free_nodes_size = ((sizeof(*free_nodes) + sizeof(ptrdiff_type) + ALIGN - 1) / ALIGN + 1) * ALIGN;
@@ -220,7 +220,11 @@ void* mm_alloc(size_t size) {
         return NULL;
     }
     assert(node->size > 0);
-    assert(node->size >= size);
+    if (node->size < size) {
+        // not enough memory left
+        // TODO: check the whole last bucket (SIZES_COUNT-1) for a large enough node
+        return NULL;
+    }
 
     // split node if big enough
     int32_t left_size = node->size - size - ALLOC_NODE_SIZE;

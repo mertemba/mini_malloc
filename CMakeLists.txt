@@ -7,3 +7,6 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=sign-compare")
 
 add_library(mini_malloc mini_malloc.c mini_malloc.h)
 target_link_libraries(mini_malloc m)
+
+add_library(mini_malloc_minimal mini_malloc_minimal.c mini_malloc.h)
+target_link_libraries(mini_malloc_minimal m)
