@@ -76,6 +76,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
     size_t blocksize = 1ull << std::uniform_int_distribution<>(9, 22)(rng);
     void* buffer = malloc(blocksize);
+    std::uniform_int_distribution<> d(0, 255);
+    for (int j = 0; j < 1024 && j < blocksize; ++j) {
+        ((char*) buffer)[j] = (char) d(rng);
+    }
     init_mini_malloc(buffer, blocksize);
     // parse input and invoke malloc and free
     while (i < size) {

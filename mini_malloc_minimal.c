@@ -193,7 +193,8 @@ void init_mini_malloc(void* buffer, size_t blocksize) {
     // allocate first block
     memnode* block_node = (memnode*) ptr;
     assert(block_node != NULL);
-    block_node->d_next_free_node = 0; // also sets to unallocated
+    block_node->d_next_free_node = 0;
+    block_node->prev_node_size = 0; // also sets to unallocated
     set_prev_free_node(block_node, get_free_nodes_head(SIZES_COUNT - 1));
     block_node->size = size;
     memnode* last_node = (memnode*) (((byte*) block_node) + (block_node->size + ALLOC_NODE_SIZE));
