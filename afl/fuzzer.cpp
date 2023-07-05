@@ -16,8 +16,22 @@ extern "C" {
 
 static std::vector<void*> regions;
 static std::unordered_map<void*, size_t> sizes;
+static std::unordered_map<void*, uint8_t> vals;
+
+void do_write(std::mt19937& rng) {
+    if (regions.empty()) {
+        return;
+    }
+    std::uniform_int_distribution<> d(0, regions.size() - 1);
+    int idx = d(rng);
+    void* ptr = regions.at(idx);
+    size_t size = sizes.at(ptr);
+    uint8_t val = vals.at(ptr);
+    std::memset(ptr, val, size);
+}
 
 void do_malloc(std::mt19937& rng) {
+    do_write(rng);
     size_t size;
     std::exponential_distribution<> d(8.0);
     do {
@@ -31,11 +45,14 @@ void do_malloc(std::mt19937& rng) {
     }
     regions.push_back(ptr);
     sizes[ptr] = size;
-    uint8_t val = (uint8_t) ((uint64_t) ptr >> 3);
+    std::uniform_int_distribution<> d2(0, 255);
+    uint8_t val = d2(rng);
+    vals.emplace(ptr, val);
     std::memset(ptr, val, size);
 }
 
 void do_free(std::mt19937& rng) {
+    do_write(rng);
     if (regions.empty()) {
         return;
     }
@@ -43,13 +60,14 @@ void do_free(std::mt19937& rng) {
     int idx = d(rng);
     void* ptr = regions[idx];
     size_t size = sizes[ptr];
-    uint8_t val = (uint8_t) ((uint64_t) ptr >> 3);
+    uint8_t val = vals.at(ptr);
     for (uint8_t* p = (uint8_t*) ptr; p < (uint8_t*) ptr + size; ++p) {
         assert(*p == val);
     }
     mm_free(ptr);
     regions.erase(regions.begin() + idx);
     sizes.erase(ptr);
+    vals.erase(ptr);
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
