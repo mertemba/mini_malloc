@@ -18,8 +18,6 @@
 #else
 #define SIZE_BITS 32
 #endif
-// TODO: with smarter size storing, this can be increased to (1ull << SIZE_BITS) * ALIGN
-#define MAX_ALLOC_SIZE ((1ull << SIZE_BITS) - 1)
 
 // for an allocated node, only the first 8 bytes of the struct are needed.
 #define ALLOC_NODE_SIZE 8
@@ -228,7 +226,6 @@ void init_mini_malloc(void* buffer, size_t blocksize) {
 
 void* mm_alloc(size_t size) {
     if (size == 0) return NULL;
-    if (size > MAX_ALLOC_SIZE) return NULL;
 
     if (size % ALIGN) {
         size += ALIGN - size % ALIGN;
@@ -244,9 +241,17 @@ void* mm_alloc(size_t size) {
         return NULL;
     }
     assert(node->size > 0);
+    if (size_index == SIZES_COUNT - 1) {
+        // linearly search all big nodes for a big enough one
+        while (node != NULL && node->size < size) {
+            node = get_next_free_node(node);
+        }
+        if (node == NULL) {
+            return NULL;
+        }
+    }
     if (node->size < size) {
         // not enough memory left
-        // TODO: check the whole last bucket (SIZES_COUNT-1) for a large enough node
         return NULL;
     }
 
