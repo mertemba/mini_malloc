@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include "mini_malloc.h"
 
 #include <assert.h>
@@ -186,6 +187,11 @@ static void prepend_free_node(memnode* node, size_index_type size_index) {
     attach_free_nodes(node, old_first_free);
 }
 
+static void set_zero(memnode* node) {
+    // fill unused memory regions with zeros to enable better compression
+    memset(((byte*) node) + sizeof(memnode), 0, node->size - (sizeof(memnode) - ALLOC_NODE_SIZE));
+}
+
 void init_mini_malloc(void* buffer, size_t blocksize) {
     byte* ptr = (byte*) buffer;
     // ensure 8-byte alignment
@@ -221,6 +227,7 @@ void init_mini_malloc(void* buffer, size_t blocksize) {
     set_allocated(last_node);
     last_node->size = 0;
     set_next_free_node(get_free_nodes_head(SIZES_COUNT - 1), block_node);
+    set_zero(block_node);
     assert((byte*) last_node + ALLOC_NODE_SIZE == (byte*) buffer + blocksize);
 }
 
@@ -297,6 +304,9 @@ static void join_with_next(memnode* node) {
     attach_free_nodes(get_prev_free_node(node), get_next_free_node(node));
     // remove next_node from nodes lists:
     attach_free_nodes(get_prev_free_node(next_node), get_next_free_node(next_node));
+    // fill header of next_node with zeros to enable better compression:
+    memset(((byte*) next_node), 0, sizeof(memnode));
+
     next_node = get_next_node(node);
     if (next_node != NULL) {
         set_prev_node_size(next_node, node->size);
@@ -320,11 +330,11 @@ void mm_free(void* ptr) {
     set_unallocated(node);
     // prepend node to free nodes list:
     prepend_free_node(node, size_index);
+    set_zero(node);
 
     join_with_next(node);
     join_with_next(get_prev_node(node));
 }
-
 
 #if REFCOUNT
 
