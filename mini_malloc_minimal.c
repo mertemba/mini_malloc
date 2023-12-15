@@ -231,6 +231,9 @@ void* mm_alloc(size_t size) {
         size += ALIGN - size % ALIGN;
     }
     size_index_type size_index = get_size_index_upper(size);
+    if (size_index < SIZES_COUNT - 1) {
+        size = sizes[size_index];
+    }
     memnode* node = NULL;
     // search for first free node
     do {

@@ -330,6 +330,9 @@ void* mm_alloc(size_t size) {
         size += ALIGN - size % ALIGN;
     }
     size_index_type size_index = get_size_index_upper(size);
+    if (size_index < SIZES_COUNT - 1) {
+        size = sizes[size_index];
+    }
 #if DEBUG
     printf("\nAlloc of %ld bytes.\n", size);
     printf("begin: free_nodes[%d] == %p.\n", SIZES_COUNT - 1, (void*) get_free_nodes_first(SIZES_COUNT - 1));
