@@ -33,8 +33,6 @@ cache locality or multi-threading were considered.
 
 * The library only supports a single provided memory block.
 * Multi-threading is not considered and must be handled by the library user.
-* Allocations above `1<<19` bytes are currently not supported, but easy to add
-  to the largest size bucket.
 * A `realloc()` function is not provided.
 
 ## License
