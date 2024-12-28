@@ -12,9 +12,9 @@ using a given memory block (e.g. an arena).
 
 int main(void) {
     void* block = malloc(BLOCKSIZE);
-    init_mini_malloc(block, BLOCKSIZE);
-    void* foo = mm_alloc(32);
-    mm_free(foo);
+    struct mini_malloc* mm = init_mini_malloc(block, BLOCKSIZE);
+    void* foo = mm_alloc(mm, 32);
+    mm_free(mm, foo);
     free(block);
     return 0;
 }
@@ -31,7 +31,7 @@ cache locality or multi-threading were considered.
 
 ## Limitations
 
-* The library only supports a single provided memory block.
+* Each instance can only use a single, non-growing memory block.
 * Multi-threading is not considered and must be handled by the library user.
 * A `realloc()` function is not provided.
 

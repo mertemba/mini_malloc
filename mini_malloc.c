@@ -14,19 +14,9 @@
 
 #include <assert.h>
 
-#define REFCOUNT 1
-
 #define ALIGN 8
 #define SIZES_COUNT 59
-
 #define MAX_PTRDIFF_VAL ((INT64_C(1) << 31) - 1)
-
-#if REFCOUNT
-#define SIZE_BITS 24
-#define MAX_REFCOUNT ((1ull << 16) - 1)
-#else
-#define SIZE_BITS 32
-#endif
 
 // for an allocated node, only the first 8 bytes of the struct are needed.
 #define ALLOC_NODE_SIZE 8
@@ -37,16 +27,16 @@ typedef uint32_t size_type;
 typedef int16_t size_index_type;
 typedef int32_t ptrdiff_type;
 
-typedef struct
-#if REFCOUNT
-        __attribute__((__packed__))
-#endif
-memnode {
-    size_type size: SIZE_BITS; // allocatable size in bytes
-    size_type prev_node_size: SIZE_BITS; // 0 if this is the first node in block; MSB set if node is allocated (ALLOCATED_FLAG)
-#if REFCOUNT
-    uint16_t refcount;
-#endif
+static size_type sizes[SIZES_COUNT];
+
+typedef struct mini_malloc {
+    ptrdiff_type _head;
+    ptrdiff_type free_nodes[SIZES_COUNT];
+} mini_malloc;
+
+typedef struct memnode {
+    size_type size; // allocatable size in bytes
+    size_type prev_node_size; // 0 if this is the first node in block; MSB set if node is allocated (ALLOCATED_FLAG)
     ptrdiff_type d_next_free_node;
     ptrdiff_type d_prev_free_node;
 } memnode;
@@ -57,9 +47,6 @@ static inline bool is_allocated(memnode* node) {
 
 static inline void set_allocated(memnode* node) {
     node->prev_node_size |= ALLOCATED_FLAG;
-#if REFCOUNT
-    node->refcount = 1;
-#endif
 }
 
 static inline void set_unallocated(memnode* node) {
@@ -71,7 +58,7 @@ static memnode* get_next_free_node(memnode* node) {
     if (node->d_next_free_node == 0) {
         return NULL;
     }
-    return (memnode*) (node->d_next_free_node + (byte*) node);
+    return (memnode*) ((byte*) node + node->d_next_free_node);
 }
 
 static memnode* get_prev_free_node(memnode* node) {
@@ -79,7 +66,7 @@ static memnode* get_prev_free_node(memnode* node) {
     if (node->d_prev_free_node == 0) {
         return NULL;
     }
-    return (memnode*) (node->d_prev_free_node + (byte*) node);
+    return (memnode*) ((byte*) node + node->d_prev_free_node);
 }
 
 static void set_next_free_node(memnode* node, memnode* next_free_node) {
@@ -117,9 +104,6 @@ static void set_prev_node_size(memnode* node, size_type prev_node_size) {
 
 #undef ALLOCATED_FLAG
 
-static ptrdiff_type (* free_nodes)[SIZES_COUNT];
-static size_type sizes[SIZES_COUNT];
-
 static int uint64_log2(uint64_t n) {
 #define S(k) if (n >= (UINT64_C(1) << k)) { i += k; n >>= k; }
     int i = -(n == 0);
@@ -149,18 +133,22 @@ static size_index_type get_size_index_upper(size_type size_) {
 
 static size_index_type get_size_index_lower(size_type size) {
     size_index_type idx = get_size_index_upper(size);
+    assert(idx >= 0 && idx < SIZES_COUNT);
     while (size < sizes[idx]) {
         --idx;
+        assert(idx >= 0 && idx < SIZES_COUNT);
     }
+    assert(idx >= 0 && idx < SIZES_COUNT);
     return idx;
 }
 
-static memnode* get_free_nodes_head(size_index_type size_index) {
-    return (memnode*) ((byte*) &((*free_nodes)[size_index]) - ALLOC_NODE_SIZE);
+static memnode* get_free_nodes_head(mini_malloc* mm, size_index_type size_index) {
+    assert(size_index >= 0 && size_index < SIZES_COUNT);
+    return (memnode*) ((byte*) &(mm->free_nodes[size_index]) - ALLOC_NODE_SIZE);
 }
 
-static memnode* get_free_nodes_first(size_index_type size_index) {
-    return get_next_free_node(get_free_nodes_head(size_index));
+static memnode* get_free_nodes_first(mini_malloc* mm, size_index_type size_index) {
+    return get_next_free_node(get_free_nodes_head(mm, size_index));
 }
 
 static void attach_free_nodes(memnode* node1, memnode* node2) {
@@ -234,9 +222,9 @@ static void check_prev_next_prts(memnode* node) {
     }
 }
 
-static void prepend_free_node(memnode* node, size_index_type size_index) {
-    memnode* old_first_free = get_free_nodes_first(size_index);
-    attach_free_nodes(get_free_nodes_head(size_index), node);
+static void prepend_free_node(mini_malloc* mm, memnode* node, size_index_type size_index) {
+    memnode* old_first_free = get_free_nodes_first(mm, size_index);
+    attach_free_nodes(get_free_nodes_head(mm, size_index), node);
     attach_free_nodes(node, old_first_free);
     check_prev_next_prts(node);
     check_prev_next_prts(old_first_free);
@@ -246,26 +234,26 @@ static void prepend_free_node(memnode* node, size_index_type size_index) {
 #endif
 }
 
-static void set_zero(memnode* node) {
-    // fill unused memory regions with zeros to enable better compression
-    memset(((byte*) node) + sizeof(memnode), 0, node->size - (sizeof(memnode) - ALLOC_NODE_SIZE));
-}
+mini_malloc* init_mini_malloc(void* buffer, size_t blocksize) {
+    mini_malloc* mm = (mini_malloc*) buffer;
+    assert((sizeof(mini_malloc) % ALIGN) == 0);
+    buffer = (byte*) buffer + sizeof(mini_malloc);
+    blocksize -= sizeof(mini_malloc);
 
-void init_mini_malloc(void* buffer, size_t blocksize) {
-    byte* ptr = (byte*) buffer;
 #if DEBUG
     printf("Allocated node header size: %u\n", ALLOC_NODE_SIZE);
     printf("Free node header size: %lu\n", sizeof(memnode));
     printf("Max. nodes per block: %lu\n", (blocksize - sizeof(memnode)) / (ALLOC_NODE_SIZE + ALIGN));
 #endif
-    // ensure 8-byte alignment
-    assert((ALLOC_NODE_SIZE % 8) == 0);
+    // ensure alignment
+    assert((ALLOC_NODE_SIZE % ALIGN) == 0);
     assert(sizeof(memnode) == 16);
 
-    // init block_node_size array
+    // init size array
     for (uint32_t bits = 1; bits <= 64; ++bits) {
         uint64_t size = ((uint64_t) (pow(2.0, bits / 4.0) + 0.001)) * ALIGN;
         size_index_type idx = get_size_index_upper(size);
+        assert(idx >= 0 && idx < SIZES_COUNT);
         sizes[idx] = size;
 #if DEBUG
         printf("Size %lu at index %d\n", size, idx);
@@ -296,47 +284,42 @@ void init_mini_malloc(void* buffer, size_t blocksize) {
     }
 #endif
 
-    free_nodes = NULL;
 #if DEBUG
     printf("Allocating new block.\n");
 #endif
     size_type block_node_size = blocksize - 2 * ALLOC_NODE_SIZE;
     // fill free_nodes array
-    size_t free_nodes_size = ((sizeof(*free_nodes) + sizeof(ptrdiff_type) + ALIGN - 1) / ALIGN) * ALIGN;
-    block_node_size -= free_nodes_size;
-    free_nodes = (ptrdiff_type (*)[SIZES_COUNT]) ((ptrdiff_type*) ptr + 1);
-    ptr += free_nodes_size;
     for (size_index_type size_index = -1; size_index < SIZES_COUNT; size_index++) {
-        (*free_nodes)[size_index] = 0;
+        mm->free_nodes[size_index] = 0;
     }
-    assert(ptr >= (byte*) &(*free_nodes)[SIZES_COUNT]);
     // allocate first block
-    memnode* block_node = (memnode*) ptr;
+    memnode* block_node = (memnode*) buffer;
     assert(block_node != NULL);
     block_node->d_next_free_node = 0;
     block_node->prev_node_size = 0; // also sets to unallocated
-    set_prev_free_node(block_node, get_free_nodes_head(SIZES_COUNT - 1));
+    set_prev_free_node(block_node, get_free_nodes_head(mm, SIZES_COUNT - 1));
     block_node->size = block_node_size;
     memnode* last_node = (memnode*) (((byte*) block_node) + (block_node->size + ALLOC_NODE_SIZE));
     set_allocated(last_node);
     last_node->size = 0;
-    set_next_free_node(get_free_nodes_head(SIZES_COUNT - 1), block_node);
-    set_zero(block_node);
+    set_next_free_node(get_free_nodes_head(mm, SIZES_COUNT - 1), block_node);
     assert((byte*) last_node + ALLOC_NODE_SIZE == (byte*) buffer + blocksize);
     check_prev_next_prts(block_node);
 #if DEBUG
     printf("First node size: %d bytes.\n", block_node->size);
     printf("Block overhead: %lu\n", blocksize - (int) get_free_nodes_first(SIZES_COUNT - 1)->size);
 #endif
+    return mm;
 }
 
-void* mm_alloc(size_t size) {
+void* mm_alloc(mini_malloc* mm, size_t size) {
     if (size == 0) return NULL;
 
     if (size % ALIGN) {
         size += ALIGN - size % ALIGN;
     }
     size_index_type size_index = get_size_index_upper(size);
+    assert(size_index >= 0 && size_index < SIZES_COUNT);
     if (size_index < SIZES_COUNT - 1) {
         size = sizes[size_index];
     }
@@ -352,7 +335,8 @@ void* mm_alloc(size_t size) {
     // highest size_index downwards, to improve memory usage,
     // or skip the second size_index, to avoid giving away 8 bytes
     do {
-        node = get_free_nodes_first(size_index);
+        assert(size_index >= 0 && size_index < SIZES_COUNT);
+        node = get_free_nodes_first(mm, size_index);
 #if DEBUG
         printf("Size index %d: Node %p.\n", size_index, (void*) node);
 #endif
@@ -420,8 +404,8 @@ void* mm_alloc(size_t size) {
         check_prev_next_prts(new_node);
 
         // prepend new_node to free nodes list:
-        prepend_free_node(new_node, left_size_index);
-        assert(get_free_nodes_first(left_size_index) == new_node);
+        prepend_free_node(mm, new_node, left_size_index);
+        assert(get_free_nodes_first(mm, left_size_index) == new_node);
     }
     check_prev_next_prts(node);
     // remove node from free nodes list:
@@ -437,7 +421,7 @@ void* mm_alloc(size_t size) {
 }
 
 
-static void join_with_next(memnode* node) {
+static void join_with_next(mini_malloc* mm, memnode* node) {
     if (node == NULL || is_allocated(node)) {
         return;
     }
@@ -456,8 +440,6 @@ static void join_with_next(memnode* node) {
     attach_free_nodes(get_prev_free_node(node), get_next_free_node(node));
     // remove next_node from nodes lists:
     attach_free_nodes(get_prev_free_node(next_node), get_next_free_node(next_node));
-    // fill header of next_node with zeros to enable better compression:
-    memset(((byte*) next_node), 0, sizeof(memnode));
 
     next_node = get_next_node(node);
     if (next_node != NULL) {
@@ -466,23 +448,15 @@ static void join_with_next(memnode* node) {
     check_prev_next_prts(next_node);
     // prepend node to free nodes list:
     size_index_type size_index = get_size_index_lower(node->size);
-    prepend_free_node(node, size_index);
+    prepend_free_node(mm, node, size_index);
     check_prev_next_prts(node);
 }
 
 
-void mm_free(void* ptr) {
+void mm_free(mini_malloc* mm, void* ptr) {
     if (!ptr) return;
 
     memnode* node = (memnode*) (((byte*) ptr) - ALLOC_NODE_SIZE);
-#if REFCOUNT
-#if DEBUG
-    printf("Refcount is %d.\n", node->refcount);
-#endif
-    if (--node->refcount > 0) {
-        return;
-    }
-#endif
 #if DEBUG
     printf("\nFreeing block %p.\n", (void*) node);
 #endif
@@ -493,22 +467,8 @@ void mm_free(void* ptr) {
 #endif
     set_unallocated(node);
     // prepend node to free nodes list:
-    prepend_free_node(node, size_index);
-    set_zero(node);
+    prepend_free_node(mm, node, size_index);
 
-    join_with_next(node);
-    join_with_next(get_prev_node(node));
+    join_with_next(mm, node);
+    join_with_next(mm, get_prev_node(node));
 }
-
-
-#if REFCOUNT
-
-void mm_inc_ref(void* ptr) {
-    assert(ptr);
-    memnode* node = (memnode*) (((byte*) ptr) - ALLOC_NODE_SIZE);
-    assert(node->refcount > 0);
-    assert(node->refcount < MAX_REFCOUNT);
-    ++node->refcount;
-}
-
-#endif

@@ -30,7 +30,7 @@ void do_write(std::mt19937& rng) {
     std::memset(ptr, val, size);
 }
 
-void do_malloc(std::mt19937& rng) {
+void do_malloc(struct mini_malloc* mm, std::mt19937& rng) {
     do_write(rng);
     size_t size;
     std::exponential_distribution<> d(8.0);
@@ -39,7 +39,7 @@ void do_malloc(std::mt19937& rng) {
         size = (size_t) (s * s * s * MAX_SIZE * 1.01) + 1;
         size += ALIGN - size % ALIGN;
     } while (size > MAX_SIZE);
-    void* ptr = mm_alloc(size);
+    void* ptr = mm_alloc(mm, size);
     if (ptr == nullptr) {
         return;
     }
@@ -51,7 +51,7 @@ void do_malloc(std::mt19937& rng) {
     std::memset(ptr, val, size);
 }
 
-void do_free(std::mt19937& rng) {
+void do_free(struct mini_malloc* mm, std::mt19937& rng) {
     do_write(rng);
     if (regions.empty()) {
         return;
@@ -64,7 +64,7 @@ void do_free(std::mt19937& rng) {
     for (uint8_t* p = (uint8_t*) ptr; p < (uint8_t*) ptr + size; ++p) {
         assert(*p == val);
     }
-    mm_free(ptr);
+    mm_free(mm, ptr);
     regions.erase(regions.begin() + idx);
     sizes.erase(ptr);
     vals.erase(ptr);
@@ -73,7 +73,6 @@ void do_free(std::mt19937& rng) {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // first four bytes are seed
     int i = 0;
-    void* ptr;
     if (size < 4) {
         return -1;
     }
@@ -98,21 +97,21 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     for (int j = 0; j < 1024 && j < blocksize; ++j) {
         ((char*) buffer)[j] = (char) d(rng);
     }
-    init_mini_malloc(buffer, blocksize);
+    struct mini_malloc* mm = init_mini_malloc(buffer, blocksize);
     // parse input and invoke malloc and free
     while (i < size) {
         switch (data[i]) {
             case 'M': // malloc
                 i++;
-                do_malloc(rng);
+                do_malloc(mm, rng);
                 break;
             case 'F': // free
                 i++;
-                do_free(rng);
+                do_free(mm, rng);
                 break;
             default:
                 // input error
-                i++;
+                free(buffer);
                 return -1;
         }
     }
